@@ -1,5 +1,4 @@
 import os
-import streamlit as st
 import faiss
 import numpy as np
 import json
@@ -7,7 +6,6 @@ from sentence_transformers import SentenceTransformer
 import google.generativeai as genai
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
-import threading
 
 # Load environment variables from .env
 load_dotenv()
@@ -179,6 +177,22 @@ def initialize_vector_db():
 # Create Flask app for API
 app = Flask(__name__)
 
+@app.route('/', methods=['GET'])
+def api_status():
+    return jsonify({
+        "status": "online",
+        "message": "Course Outcome & Bloom's Level Question Generator API is running",
+        "usage": {
+            "endpoint": "/generate-questions",
+            "method": "POST",
+            "body": {
+                "course_outcome": "CO1: Demonstrate understanding...",
+                "bloom_level": "Understand",
+                "save_to_json": true
+            }
+        }
+    })
+
 @app.route('/generate-questions', methods=['POST'])
 def api_generate_questions():
     global index, chunks, embeddings
@@ -222,121 +236,11 @@ def api_generate_questions():
             "error": str(e)
         }), 500
 
-# Streamlit App
-def main():
-    st.title("Course Outcome & Bloom's Level Based Question Generator")
-
-    # Load course content and course outcomes
-    transcript = load_file("cleaned_transcript.txt")
-    course_outcomes = load_file("course_outcomes.txt")
-    co_list = course_outcomes.strip().split("\n")
-    bloom_levels = ["Remember", "Understand", "Apply", "Analyze", "Evaluate", "Create"]
-
-    # Load or build vector DB
-    global index, chunks, embeddings
-    if index is None or chunks is None or embeddings is None:
-        initialize_vector_db()
-
-    # Select CO and Bloom Level
-    selected_co = st.selectbox("Select Course Outcome:", co_list)
-    selected_bloom = st.selectbox("Select Bloom's Level:", bloom_levels)
-
-    if st.button("Generate Question"):
-        with st.spinner("Retrieving content and generating questions..."):
-            try:
-                best_chunk = semantic_search(selected_co, index, chunks, embeddings, top_k=1)[0]
-                questions_text = generate_questions(best_chunk, selected_co, selected_bloom)
-                
-                # Parse the questions into the requested structure
-                questions_dict = parse_questions(questions_text)
-
-                st.subheader("Generated Questions")
-                
-                # Display objective questions
-                st.write("**Objective Questions:**")
-                for i, q in enumerate(questions_dict["objective"], 1):
-                    st.write(f"{i}. {q}")
-                
-                # Display subjective questions
-                st.write("**Short Answer Questions:**")
-                for i, q in enumerate(questions_dict["subjective"], 1):
-                    st.write(f"{i}. {q}")
-
-                # Save to JSON
-                save_to_json(selected_co, selected_bloom, questions_dict)
-
-                st.success("Questions saved to generated_questions.json")
-
-                # Download buttons
-                st.download_button(
-                    "Download Latest Questions (Text)",
-                    questions_text,
-                    file_name="latest_generated_questions.txt"
-                )
-
-                # Option to download full JSON
-                with open("generated_questions.json", "r", encoding="utf-8") as f:
-                    st.download_button(
-                        "Download Full Questions (JSON)",
-                        f,
-                        file_name="generated_questions.json",
-                        mime="application/json"
-                    )
-
-            except Exception as e:
-                st.error(f"Error: {e}")
-
-    # Display API usage information
-    with st.expander("API Usage"):
-        st.markdown("""
-        ## API Endpoint
-        The application also provides an API endpoint for programmatic access:
-        
-        **Endpoint:** `/generate-questions`
-        
-        **Method:** POST
-        
-        **Request Body:**
-        ```json
-        {
-            "course_outcome": "CO1: Demonstrate understanding of fundamental programming concepts in Python",
-            "bloom_level": "Understand",
-            "save_to_json": true
-        }
-        ```
-        
-        **Response:**
-        ```json
-        {
-            "course_outcome": "CO1: Demonstrate understanding of fundamental programming concepts in Python",
-            "bloom_level": "Understand",
-            "questions": {
-                "objective": [
-                    "What is the primary advantage of Python being an interpreted language?",
-                    "Which Python data structure would be most appropriate for storing unique elements?"
-                ],
-                "subjective": [
-                    "Explain how Python supports multiple programming paradigms with examples.",
-                    "Compare and contrast Python's lists and tuples in terms of mutability and use cases."
-                ]
-            },
-            "raw_text": "Objective Questions:..."
-        }
-        ```
-        """)
-
-
-# Run Flask and Streamlit in separate threads
-def run_flask():
-    app.run(host='0.0.0.0', port=5000)
-
 if __name__ == "__main__":
     # Initialize vector database
+    print("Initializing vector database...")
     initialize_vector_db()
     
-    # Start Flask in a separate thread
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    
-    # Run Streamlit app
-    main()
+    # Run the Flask app
+    print("Starting API server...")
+    app.run(host='0.0.0.0', port=5000, debug=False)

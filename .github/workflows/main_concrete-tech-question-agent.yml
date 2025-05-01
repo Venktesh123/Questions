@@ -18,38 +18,93 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Set up Python version
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Create and start virtual environment
         run: |
           python -m venv venv
           source venv/bin/activate
-      
+
       - name: Install dependencies
         run: pip install -r requirements.txt
-        
-      # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
 
+      # Create necessary configuration files
+      - name: Create deployment files
+        run: |
+          # Create web.config
+          echo '<?xml version="1.0" encoding="utf-8"?>' > web.config
+          echo '<configuration>' >> web.config
+          echo '  <system.webServer>' >> web.config
+          echo '    <handlers>' >> web.config
+          echo '      <add name="PythonHandler" path="*" verb="*" modules="httpPlatformHandler" resourceType="Unspecified"/>' >> web.config
+          echo '    </handlers>' >> web.config
+          echo '    <httpPlatform processPath="%home%\site\wwwroot\run.bat"' >> web.config
+          echo '                  arguments=""' >> web.config
+          echo '                  stdoutLogEnabled="true"' >> web.config
+          echo '                  stdoutLogFile="%home%\LogFiles\python.log"' >> web.config
+          echo '                  startupTimeLimit="600"' >> web.config
+          echo '                  startupRetryCount="3">' >> web.config
+          echo '      <environmentVariables>' >> web.config
+          echo '        <environmentVariable name="PORT" value="%HTTP_PLATFORM_PORT%" />' >> web.config
+          echo '        <environmentVariable name="STREAMLIT_SERVER_PORT" value="%HTTP_PLATFORM_PORT%" />' >> web.config
+          echo '      </environmentVariables>' >> web.config
+          echo '    </httpPlatform>' >> web.config
+          echo '  </system.webServer>' >> web.config
+          echo '</configuration>' >> web.config
+
+          # Create run.bat
+          echo '@echo off' > run.bat
+          echo 'cd /d "%~dp0"' >> run.bat
+          echo 'IF NOT EXIST .venv\Scripts\python.exe (' >> run.bat
+          echo '  python -m venv .venv' >> run.bat
+          echo '  .venv\Scripts\python.exe -m pip install --upgrade pip' >> run.bat
+          echo '  .venv\Scripts\pip install -r requirements.txt' >> run.bat
+          echo ')' >> run.bat
+          echo 'call .venv\Scripts\activate.bat' >> run.bat
+          echo 'streamlit run app.py --server.port %HTTP_PLATFORM_PORT% --server.enableCORS=false --server.enableXsrfProtection=false' >> run.bat
+
+          # Create .streamlit directory and config
+          mkdir -p .streamlit
+          echo '[server]' > .streamlit/config.toml
+          echo 'enableCORS = false' >> .streamlit/config.toml
+          echo 'enableXsrfProtection = false' >> .streamlit/config.toml
+          echo '' >> .streamlit/config.toml
+          echo '[browser]' >> .streamlit/config.toml
+          echo 'gatherUsageStats = false' >> .streamlit/config.toml
+
+          # Fix app.py to handle missing environment variable gracefully
+          sed -i 's/if not GOOGLE_API_KEY:/if not GOOGLE_API_KEY and os.environ.get("GOOGLE_API_KEY") is None:/' app.py
+          sed -i 's/st.stop()/GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")/' app.py
+
+          # Create a startup script for Azure
+          echo '#!/bin/bash' > startup.sh
+          echo 'cd $HOME/site/wwwroot' >> startup.sh
+          echo 'python -m venv .venv' >> startup.sh
+          echo '.venv/bin/pip install --upgrade pip' >> startup.sh
+          echo '.venv/bin/pip install -r requirements.txt' >> startup.sh
+          chmod +x startup.sh
+
+      # Zip artifact for deployment - exclude unnecessary files
       - name: Zip artifact for deployment
-        run: zip release.zip ./* -r
+        run: zip -r release.zip . -x "venv/*" ".git/*" ".github/*" "*.pyc" "__pycache__/*"
 
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
           name: python-app
-          path: |
-            release.zip
-            !venv/
+          path: release.zip
 
   deploy:
     runs-on: ubuntu-latest
     needs: build
     environment:
-      name: 'Production'
+      name: "Production"
       url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
     permissions:
       id-token: write #This is required for requesting the JWT
@@ -64,7 +119,10 @@ jobs:
       - name: Unzip artifact for deployment
         run: unzip release.zip
 
-      
+      # Wait a bit before deploying to avoid SCM container restart issues
+      - name: Wait before deployment
+        run: sleep 30
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -72,10 +130,10 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_EF5F4CE390DB4489BD4E008D5C8D85AA }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_3CB48BCD469D41449D45C4C97354F3EF }}
 
-      - name: 'Deploy to Azure Web App'
+      - name: "Deploy to Azure Web App"
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
         with:
-          app-name: 'concrete-tech-question-agent'
-          slot-name: 'Production'
-          
+          app-name: "concrete-tech-question-agent"
+          slot-name: "Production"
+          package: .

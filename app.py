@@ -80,13 +80,17 @@ def generate_questions(retrieved_content, co_text, bloom_level):
         "You are a Question Generator Agent.",
         f"Course Outcome (CO): {co_text}",
         f"Bloom's Taxonomy Level: {bloom_level}",
-        "Based on the content below, generate two questions:",
-        "- One Objective Type",
-        "- One Short Answer Type",
+        "Based on the content below, generate multiple questions:",
+        "- Two Objective Type Questions",
+        "- Two Short Answer Type Questions",
         "Content:\n" + retrieved_content,
         "\nOnly output the questions in the following format:",
-        "Objective Question:\n1. <question>",
-        "Short Answer Question:\n1. <question>"
+        "Objective Questions:",
+        "1. <question 1>",
+        "2. <question 2>",
+        "Short Answer Questions:",
+        "1. <question 1>",
+        "2. <question 2>"
     ]
 
     full_prompt = "\n".join(prompt_parts)
@@ -95,27 +99,44 @@ def generate_questions(retrieved_content, co_text, bloom_level):
     response = model.generate_content(full_prompt)
 
     output = response.text.strip()
-    if "Objective Question" in output:
-        output = output.split("Objective Question", 1)[1]
-        output = "Objective Question" + output.strip()
     return output
 
+# Parse generated questions into structured format
+def parse_questions(questions_text):
+    objective_questions = []
+    subjective_questions = []
+    
+    if "Objective Questions:" in questions_text and "Short Answer Questions:" in questions_text:
+        parts = questions_text.split("Short Answer Questions:")
+        obj_part = parts[0].replace("Objective Questions:", "").strip()
+        subj_part = parts[1].strip()
+        
+        # Extract objective questions
+        for line in obj_part.split("\n"):
+            if line.strip() and any(c.isdigit() for c in line[:2]):
+                question = line.strip()
+                # Remove the number prefix (e.g., "1. ", "2. ")
+                if ". " in question[:3]:
+                    question = question[question.find(". ")+2:]
+                objective_questions.append(question)
+        
+        # Extract subjective questions
+        for line in subj_part.split("\n"):
+            if line.strip() and any(c.isdigit() for c in line[:2]):
+                question = line.strip()
+                # Remove the number prefix
+                if ". " in question[:3]:
+                    question = question[question.find(". ")+2:]
+                subjective_questions.append(question)
+    
+    return {"objective": objective_questions, "subjective": subjective_questions}
+
 # Save generated questions to JSON
-def save_to_json(selected_co, selected_bloom, questions, json_file="generated_questions.json"):
-    # Extract Objective and Short Answer parts
-    objective_q = ""
-    short_answer_q = ""
-
-    if "Short Answer Question:" in questions:
-        parts = questions.split("Short Answer Question:")
-        objective_q = parts[0].replace("Objective Question:", "").strip()
-        short_answer_q = parts[1].strip()
-
+def save_to_json(selected_co, selected_bloom, questions_dict, json_file="generated_questions.json"):
     new_entry = {
         "course_outcome": selected_co,
         "bloom_level": selected_bloom,
-        "objective_question": objective_q,
-        "short_answer_question": short_answer_q
+        "questions": questions_dict
     }
 
     # Load existing data if exists
@@ -157,24 +178,36 @@ def main():
     selected_bloom = st.selectbox("Select Bloom's Level:", bloom_levels)
 
     if st.button("Generate Question"):
-        with st.spinner("Retrieving content and generating question..."):
+        with st.spinner("Retrieving content and generating questions..."):
             try:
                 best_chunk = semantic_search(selected_co, index, chunks, embeddings, top_k=1)[0]
-                questions = generate_questions(best_chunk, selected_co, selected_bloom)
+                questions_text = generate_questions(best_chunk, selected_co, selected_bloom)
+                
+                # Parse the questions into the requested structure
+                questions_dict = parse_questions(questions_text)
 
                 st.subheader("Generated Questions")
-                st.write(questions)
+                
+                # Display objective questions
+                st.write("**Objective Questions:**")
+                for i, q in enumerate(questions_dict["objective"], 1):
+                    st.write(f"{i}. {q}")
+                
+                # Display subjective questions
+                st.write("**Short Answer Questions:**")
+                for i, q in enumerate(questions_dict["subjective"], 1):
+                    st.write(f"{i}. {q}")
 
                 # Save to JSON
-                save_to_json(selected_co, selected_bloom, questions)
+                save_to_json(selected_co, selected_bloom, questions_dict)
 
-                st.success("Question saved to generated_questions.json")
+                st.success("Questions saved to generated_questions.json")
 
                 # Download buttons
                 st.download_button(
-                    "Download Latest Question (Text)",
-                    questions,
-                    file_name="latest_generated_question.txt"
+                    "Download Latest Questions (Text)",
+                    questions_text,
+                    file_name="latest_generated_questions.txt"
                 )
 
                 # Option to download full JSON
@@ -191,6 +224,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-

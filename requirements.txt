@@ -5,3 +5,4 @@ sentence-transformers==4.1.0
 google-generativeai==0.4.1
 numpy==1.26.4
 tqdm==4.66.2
+flask==2.3.3

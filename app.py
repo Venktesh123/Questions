@@ -6,6 +6,8 @@ import json
 from sentence_transformers import SentenceTransformer
 import google.generativeai as genai
 from dotenv import load_dotenv
+from flask import Flask, request, jsonify
+import threading
 
 # Load environment variables from .env
 load_dotenv()
@@ -14,13 +16,18 @@ load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 if not GOOGLE_API_KEY:
-    st.error("Google API Key not found. Please check your .env file.")
-    st.stop()
+    print("Google API Key not found. Please check your .env file.")
+    exit(1)
 
 genai.configure(api_key=GOOGLE_API_KEY)
 
 # Load sentence transformer model
 embed_model = SentenceTransformer('all-MiniLM-L6-v2')
+
+# Global variables for vector data
+index = None
+chunks = None
+embeddings = None
 
 # Load Files
 def load_file(file_path):
@@ -151,6 +158,69 @@ def save_to_json(selected_co, selected_bloom, questions_dict, json_file="generat
     # Save back to JSON
     with open(json_file, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
+    
+    return new_entry
+
+# Initialize vector database
+def initialize_vector_db():
+    global index, chunks, embeddings
+    # Load or build vector DB
+    index, chunks, embeddings = load_vector_data()
+    if index is None:
+        print("Building vector database... please wait")
+        transcript = load_file("cleaned_transcript.txt")
+        chunks = chunk_text(transcript)
+        index, chunks, embeddings = build_vector_index(chunks)
+        save_vector_data(index, chunks, embeddings)
+        print("Vector database built and cached")
+    else:
+        print("Loaded cached vector database")
+
+# Create Flask app for API
+app = Flask(__name__)
+
+@app.route('/generate-questions', methods=['POST'])
+def api_generate_questions():
+    global index, chunks, embeddings
+    
+    if index is None or chunks is None or embeddings is None:
+        initialize_vector_db()
+    
+    # Get request data
+    data = request.get_json()
+    
+    if not data or 'course_outcome' not in data or 'bloom_level' not in data:
+        return jsonify({
+            "error": "Missing required parameters. Please provide 'course_outcome' and 'bloom_level'."
+        }), 400
+    
+    selected_co = data['course_outcome']
+    selected_bloom = data['bloom_level']
+    
+    try:
+        # Generate questions
+        best_chunk = semantic_search(selected_co, index, chunks, embeddings, top_k=1)[0]
+        questions_text = generate_questions(best_chunk, selected_co, selected_bloom)
+        
+        # Parse the questions into the requested structure
+        questions_dict = parse_questions(questions_text)
+        
+        # Save to JSON (optional)
+        if data.get('save_to_json', False):
+            save_to_json(selected_co, selected_bloom, questions_dict)
+        
+        # Return the generated questions
+        return jsonify({
+            "course_outcome": selected_co,
+            "bloom_level": selected_bloom,
+            "questions": questions_dict,
+            "raw_text": questions_text
+        })
+    
+    except Exception as e:
+        return jsonify({
+            "error": str(e)
+        }), 500
 
 # Streamlit App
 def main():
@@ -163,15 +233,9 @@ def main():
     bloom_levels = ["Remember", "Understand", "Apply", "Analyze", "Evaluate", "Create"]
 
     # Load or build vector DB
-    index, chunks, embeddings = load_vector_data()
-    if index is None:
-        st.info("Building vector database... please wait")
-        chunks = chunk_text(transcript)
-        index, chunks, embeddings = build_vector_index(chunks)
-        save_vector_data(index, chunks, embeddings)
-        st.success("Vector database built and cached")
-    else:
-        st.success("Loaded cached vector database")
+    global index, chunks, embeddings
+    if index is None or chunks is None or embeddings is None:
+        initialize_vector_db()
 
     # Select CO and Bloom Level
     selected_co = st.selectbox("Select Course Outcome:", co_list)
@@ -222,5 +286,57 @@ def main():
             except Exception as e:
                 st.error(f"Error: {e}")
 
+    # Display API usage information
+    with st.expander("API Usage"):
+        st.markdown("""
+        ## API Endpoint
+        The application also provides an API endpoint for programmatic access:
+        
+        **Endpoint:** `/generate-questions`
+        
+        **Method:** POST
+        
+        **Request Body:**
+        ```json
+        {
+            "course_outcome": "CO1: Demonstrate understanding of fundamental programming concepts in Python",
+            "bloom_level": "Understand",
+            "save_to_json": true
+        }
+        ```
+        
+        **Response:**
+        ```json
+        {
+            "course_outcome": "CO1: Demonstrate understanding of fundamental programming concepts in Python",
+            "bloom_level": "Understand",
+            "questions": {
+                "objective": [
+                    "What is the primary advantage of Python being an interpreted language?",
+                    "Which Python data structure would be most appropriate for storing unique elements?"
+                ],
+                "subjective": [
+                    "Explain how Python supports multiple programming paradigms with examples.",
+                    "Compare and contrast Python's lists and tuples in terms of mutability and use cases."
+                ]
+            },
+            "raw_text": "Objective Questions:..."
+        }
+        ```
+        """)
+
+
+# Run Flask and Streamlit in separate threads
+def run_flask():
+    app.run(host='0.0.0.0', port=5000)
+
 if __name__ == "__main__":
+    # Initialize vector database
+    initialize_vector_db()
+    
+    # Start Flask in a separate thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Run Streamlit app
     main()

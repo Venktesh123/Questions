@@ -48,24 +48,7 @@ def chunk_text(text, chunk_size=500):
     
     return chunks
 
-# Save and Load vector data
-def save_vector_data(chunks, embeddings):
-    np.save("chunks.npy", np.array(chunks))
-    np.save("embeddings.npy", embeddings)
-
-def load_vector_data():
-    if os.path.exists("chunks.npy") and os.path.exists("embeddings.npy"):
-        chunks = np.load("chunks.npy", allow_pickle=True).tolist()
-        embeddings = np.load("embeddings.npy")
-        return chunks, embeddings
-    return None, None
-
-# Build Vector Embeddings
-def build_vector_embeddings(chunks):
-    embeddings = embed_model.encode(chunks)
-    return chunks, embeddings
-
-# Semantic search using NumPy (replacing FAISS)
+# Semantic search using NumPy
 def semantic_search(query_text, chunks, embeddings, top_k=1):
     # Encode the query
     query_embedding = embed_model.encode([query_text])[0]
@@ -138,43 +121,15 @@ def parse_questions(questions_text):
     
     return {"objective": objective_questions, "subjective": subjective_questions}
 
-# Save generated questions to JSON
-def save_to_json(selected_co, selected_bloom, questions_dict, json_file="generated_questions.json"):
-    new_entry = {
-        "course_outcome": selected_co,
-        "bloom_level": selected_bloom,
-        "questions": questions_dict
-    }
-
-    # Load existing data if exists
-    if os.path.exists(json_file):
-        with open(json_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    else:
-        data = []
-
-    data.append(new_entry)
-
-    # Save back to JSON
-    with open(json_file, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-    
-    return new_entry
-
 # Initialize vector database
 def initialize_vector_db():
     global chunks, embeddings
-    # Load or build vector DB
-    chunks, embeddings = load_vector_data()
-    if chunks is None or embeddings is None:
-        print("Building vector database... please wait")
-        transcript = load_file("cleaned_transcript.txt")
-        chunks = chunk_text(transcript)
-        chunks, embeddings = build_vector_embeddings(chunks)
-        save_vector_data(chunks, embeddings)
-        print("Vector database built and cached")
-    else:
-        print("Loaded cached vector database")
+    
+    print("Building vector database... please wait")
+    transcript = load_file("cleaned_transcript.txt")
+    chunks = chunk_text(transcript)
+    embeddings = embed_model.encode(chunks)
+    print("Vector database built")
 
 # Create Flask app for API
 app = Flask(__name__)
@@ -190,7 +145,7 @@ def api_status():
             "body": {
                 "course_outcome": "CO1: Demonstrate understanding...",
                 "bloom_level": "Understand",
-                "save_to_json": True
+                "save_to_json": False
             }
         }
     })
@@ -220,10 +175,6 @@ def api_generate_questions():
         
         # Parse the questions into the requested structure
         questions_dict = parse_questions(questions_text)
-        
-        # Save to JSON (optional)
-        if data.get('save_to_json', False):
-            save_to_json(selected_co, selected_bloom, questions_dict)
         
         # Return the generated questions
         return jsonify({

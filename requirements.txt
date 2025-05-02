@@ -1,8 +1,7 @@
 flask==2.3.3
 python-dotenv==1.0.1
-faiss-cpu==1.8.0
 sentence-transformers==4.1.0
-google-generativeai==0.4.1
+google-generativeai==0.8.0
 numpy==1.26.4
 tqdm==4.66.2
 gunicorn==21.2.0

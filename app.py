@@ -1,5 +1,4 @@
 import os
-import faiss
 import numpy as np
 import json
 from sentence_transformers import SentenceTransformer
@@ -23,7 +22,6 @@ genai.configure(api_key=GOOGLE_API_KEY)
 embed_model = SentenceTransformer('all-MiniLM-L6-v2')
 
 # Global variables for vector data
-index = None
 chunks = None
 embeddings = None
 
@@ -50,33 +48,37 @@ def chunk_text(text, chunk_size=500):
     
     return chunks
 
-# Save and Load vector index
-def save_vector_data(index, chunks, embeddings):
-    faiss.write_index(index, "faiss_index.index")
+# Save and Load vector data
+def save_vector_data(chunks, embeddings):
     np.save("chunks.npy", np.array(chunks))
     np.save("embeddings.npy", embeddings)
 
 def load_vector_data():
-    if os.path.exists("faiss_index.index") and os.path.exists("chunks.npy") and os.path.exists("embeddings.npy"):
-        index = faiss.read_index("faiss_index.index")
+    if os.path.exists("chunks.npy") and os.path.exists("embeddings.npy"):
         chunks = np.load("chunks.npy", allow_pickle=True).tolist()
         embeddings = np.load("embeddings.npy")
-        return index, chunks, embeddings
-    return None, None, None
+        return chunks, embeddings
+    return None, None
 
-# Build Vector Index
-def build_vector_index(chunks):
+# Build Vector Embeddings
+def build_vector_embeddings(chunks):
     embeddings = embed_model.encode(chunks)
-    dimension = embeddings.shape[1]
-    index = faiss.IndexFlatL2(dimension)
-    index.add(np.array(embeddings))
-    return index, chunks, embeddings
+    return chunks, embeddings
 
-# Semantic search
-def semantic_search(co_text, index, chunks, embeddings, top_k=1):
-    co_embedding = embed_model.encode([co_text])
-    distances, indices = index.search(np.array(co_embedding), top_k)
-    retrieved_chunks = [chunks[i] for i in indices[0]]
+# Semantic search using NumPy (replacing FAISS)
+def semantic_search(query_text, chunks, embeddings, top_k=1):
+    # Encode the query
+    query_embedding = embed_model.encode([query_text])[0]
+    
+    # Calculate L2 distances
+    distances = np.linalg.norm(embeddings - query_embedding, axis=1)
+    
+    # Get indices of top_k smallest distances
+    top_indices = np.argsort(distances)[:top_k]
+    
+    # Get corresponding chunks
+    retrieved_chunks = [chunks[i] for i in top_indices]
+    
     return retrieved_chunks
 
 # Question Generation
@@ -161,15 +163,15 @@ def save_to_json(selected_co, selected_bloom, questions_dict, json_file="generat
 
 # Initialize vector database
 def initialize_vector_db():
-    global index, chunks, embeddings
+    global chunks, embeddings
     # Load or build vector DB
-    index, chunks, embeddings = load_vector_data()
-    if index is None:
+    chunks, embeddings = load_vector_data()
+    if chunks is None or embeddings is None:
         print("Building vector database... please wait")
         transcript = load_file("cleaned_transcript.txt")
         chunks = chunk_text(transcript)
-        index, chunks, embeddings = build_vector_index(chunks)
-        save_vector_data(index, chunks, embeddings)
+        chunks, embeddings = build_vector_embeddings(chunks)
+        save_vector_data(chunks, embeddings)
         print("Vector database built and cached")
     else:
         print("Loaded cached vector database")
@@ -188,16 +190,16 @@ def api_status():
             "body": {
                 "course_outcome": "CO1: Demonstrate understanding...",
                 "bloom_level": "Understand",
-                "save_to_json": true
+                "save_to_json": True
             }
         }
     })
 
 @app.route('/generate-questions', methods=['POST'])
 def api_generate_questions():
-    global index, chunks, embeddings
+    global chunks, embeddings
     
-    if index is None or chunks is None or embeddings is None:
+    if chunks is None or embeddings is None:
         initialize_vector_db()
     
     # Get request data
@@ -213,7 +215,7 @@ def api_generate_questions():
     
     try:
         # Generate questions
-        best_chunk = semantic_search(selected_co, index, chunks, embeddings, top_k=1)[0]
+        best_chunk = semantic_search(selected_co, chunks, embeddings, top_k=1)[0]
         questions_text = generate_questions(best_chunk, selected_co, selected_bloom)
         
         # Parse the questions into the requested structure

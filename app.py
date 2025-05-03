@@ -6,21 +6,27 @@ import google.generativeai as genai
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 
-# Load environment variables from .env
+# Load environment variables from .env file (local development)
+# In production (Azure), set environment variables in App Settings
 load_dotenv()
 
 # Load Gemini API Key
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 if not GOOGLE_API_KEY:
-    print("Google API Key not found. Please check your environment variables.")
+    print("Warning: Google API Key not found. Please check your environment variables.")
     # Don't exit in production, just log the warning
-    # exit(1)
 
-genai.configure(api_key=GOOGLE_API_KEY)
+try:
+    genai.configure(api_key=GOOGLE_API_KEY)
+except Exception as e:
+    print(f"Error configuring Google Generative AI: {str(e)}")
 
 # Load sentence transformer model
-embed_model = SentenceTransformer('all-MiniLM-L6-v2')
+try:
+    embed_model = SentenceTransformer('all-MiniLM-L6-v2')
+except Exception as e:
+    print(f"Error loading SentenceTransformer model: {str(e)}")
 
 # Global variables for vector data
 chunks = None
@@ -37,6 +43,9 @@ def load_file(file_path):
 
 # Chunking the transcript
 def chunk_text(text, chunk_size=500):
+    if not text:
+        return ["Sample text for empty transcript"]
+    
     sentences = text.split('. ')
     chunks = []
     current_chunk = ""
@@ -90,11 +99,14 @@ def generate_questions(retrieved_content, co_text, bloom_level):
 
     full_prompt = "\n".join(prompt_parts)
 
-    model = genai.GenerativeModel('gemini-1.5-pro')
-    response = model.generate_content(full_prompt)
-
-    output = response.text.strip()
-    return output
+    try:
+        model = genai.GenerativeModel('gemini-1.5-pro')
+        response = model.generate_content(full_prompt)
+        output = response.text.strip()
+        return output
+    except Exception as e:
+        print(f"Error generating questions: {str(e)}")
+        return "Error generating questions. Please check logs."
 
 # Parse generated questions into structured format
 def parse_questions(questions_text):
@@ -136,14 +148,14 @@ def initialize_vector_db():
         if transcript:
             chunks = chunk_text(transcript)
             embeddings = embed_model.encode(chunks)
-            print("Vector database built")
+            print(f"Vector database built with {len(chunks)} chunks")
         else:
-            print("Warning: transcript file empty or not found")
-            chunks = ["Sample content"]
+            print("Warning: transcript file empty or not found, using sample data")
+            chunks = ["Sample content for initialization"]
             embeddings = embed_model.encode(chunks)
     except Exception as e:
         print(f"Error initializing vector database: {str(e)}")
-        chunks = ["Sample content"]
+        chunks = ["Sample content for error case"]
         embeddings = embed_model.encode(chunks)
 
 # Create Flask app for API
@@ -204,12 +216,16 @@ def api_generate_questions():
             "error": str(e)
         }), 500
 
+# This app.py file is the entry point
+# The code below is for both local development and Azure App Service
+# For Azure, gunicorn will be used to run the app
+# The app variable above will be imported by gunicorn
+
+# Initialize database on startup
+initialize_vector_db()
+
 # For local development
 if __name__ == "__main__":
-    # Initialize vector database
-    print("Initializing vector database...")
-    initialize_vector_db()
-    
     # Get port from environment variable or use default
     port = int(os.environ.get("PORT", 8000))
     

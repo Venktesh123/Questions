@@ -13,8 +13,9 @@ load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 if not GOOGLE_API_KEY:
-    print("Google API Key not found. Please check your .env file.")
-    exit(1)
+    print("Google API Key not found. Please check your environment variables.")
+    # Don't exit in production, just log the warning
+    # exit(1)
 
 genai.configure(api_key=GOOGLE_API_KEY)
 
@@ -27,8 +28,12 @@ embeddings = None
 
 # Load Files
 def load_file(file_path):
-    with open(file_path, "r", encoding="utf-8") as file:
-        return file.read()
+    try:
+        with open(file_path, "r", encoding="utf-8") as file:
+            return file.read()
+    except Exception as e:
+        print(f"Error loading file {file_path}: {str(e)}")
+        return ""
 
 # Chunking the transcript
 def chunk_text(text, chunk_size=500):
@@ -125,11 +130,21 @@ def parse_questions(questions_text):
 def initialize_vector_db():
     global chunks, embeddings
     
-    print("Building vector database... please wait")
-    transcript = load_file("cleaned_transcript.txt")
-    chunks = chunk_text(transcript)
-    embeddings = embed_model.encode(chunks)
-    print("Vector database built")
+    try:
+        print("Building vector database... please wait")
+        transcript = load_file("cleaned_transcript.txt")
+        if transcript:
+            chunks = chunk_text(transcript)
+            embeddings = embed_model.encode(chunks)
+            print("Vector database built")
+        else:
+            print("Warning: transcript file empty or not found")
+            chunks = ["Sample content"]
+            embeddings = embed_model.encode(chunks)
+    except Exception as e:
+        print(f"Error initializing vector database: {str(e)}")
+        chunks = ["Sample content"]
+        embeddings = embed_model.encode(chunks)
 
 # Create Flask app for API
 app = Flask(__name__)
@@ -189,11 +204,15 @@ def api_generate_questions():
             "error": str(e)
         }), 500
 
+# For local development
 if __name__ == "__main__":
     # Initialize vector database
     print("Initializing vector database...")
     initialize_vector_db()
     
+    # Get port from environment variable or use default
+    port = int(os.environ.get("PORT", 8000))
+    
     # Run the Flask app
-    print("Starting API server...")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    print(f"Starting API server on port {port}...")
+    app.run(host='0.0.0.0', port=port, debug=False)
